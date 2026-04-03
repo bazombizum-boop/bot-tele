@@ -46,7 +46,7 @@ def send_telegram(msg):
     except:
         pass
 
-# 🔥 FIX: MULTI MESSAGE
+# ✅ FIX MULTI COMMAND
 def get_updates():
     global LAST_UPDATE_ID
     messages = []
@@ -110,7 +110,7 @@ print(f"=== WATCHER STARTED: {VPS_NAME} ===")
 
 while True:
     try:
-        # 🔥 PROCESS ALL COMMANDS
+        # 🔥 HANDLE SEMUA COMMAND
         commands = get_updates()
 
         for cmd in commands:
@@ -143,16 +143,44 @@ while True:
 
             elif cmd == f"/status {VPS_NAME}":
                 status = get_status()
-                send_telegram(f"📊 {VPS_NAME}\nStatus: {status}")
+                denied, _ = check_errors()
+
+                if denied >= 5:
+                    health = "❌ PROXY MATI"
+                elif denied > 0:
+                    health = "⚠️ WARNING"
+                else:
+                    health = "✅ NORMAL"
+
+                send_telegram(
+                    f"📊 {VPS_NAME}\n"
+                    f"Service: {status}\n"
+                    f"Denied: {denied}\n"
+                    f"Health: {health}"
+                )
 
             elif cmd == "/status all":
                 status = get_status()
-                send_telegram(f"📊 {VPS_NAME}\nStatus: {status}")
+                denied, _ = check_errors()
+
+                if denied >= 5:
+                    health = "❌ PROXY MATI"
+                elif denied > 0:
+                    health = "⚠️ WARNING"
+                else:
+                    health = "✅ NORMAL"
+
+                send_telegram(
+                    f"📊 {VPS_NAME}\n"
+                    f"Service: {status}\n"
+                    f"Denied: {denied}\n"
+                    f"Health: {health}"
+                )
 
             elif command.startswith("/"):
                 send_telegram("❌ Command tidak dikenali\nKetik /start")
 
-        # 🔥 ERROR CHECK TIAP 3 MENIT
+        # 🔥 AUTO CHECK ERROR (3 MENIT)
         now = time.time()
         if now - LAST_ERROR_CHECK >= ERROR_INTERVAL:
             LAST_ERROR_CHECK = now
@@ -173,6 +201,7 @@ while True:
                             f"Denied: {denied_after}\n"
                             f"Status: IP PROXY MATI"
                         )
+                        LAST_ALERT = now
 
     except Exception as e:
         print(f"[ERROR] {e}")
