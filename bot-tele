@@ -1,0 +1,131 @@
+#!/bin/bash
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Run as root (sudo)"
+  exit
+fi
+
+# 🔹 Input user (AMAN, tidak disimpan di GitHub)
+read -p "Masukkan nama VPS: " VPS_NAME
+read -p "Masukkan Telegram Token: " TELEGRAM_TOKEN
+read -p "Masukkan Chat ID: " TELEGRAM_CHAT_ID
+
+echo "Installing dependencies..."
+apt-get update -y
+apt-get install -y python3 screen curl python3-requests
+
+echo "Creating Python watcher..."
+
+cat << EOF > autorestart.py
+import time
+import os
+import subprocess
+import requests
+
+SERVICE_NAME = "earnapp-proxy"
+CHECK_INTERVAL = 180
+ERROR_THRESHOLD = 5
+
+VPS_NAME = "$VPS_NAME"
+TELEGRAM_TOKEN = "$TELEGRAM_TOKEN"
+TELEGRAM_CHAT_ID = "$TELEGRAM_CHAT_ID"
+
+LAST_UPDATE_ID = 0
+LAST_ALERT = 0
+ALERT_COOLDOWN = 600  # 10 menit
+
+def send_telegram(msg):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+        )
+    except:
+        pass
+
+def get_updates():
+    global LAST_UPDATE_ID
+    try:
+        res = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        ).json()
+
+        for update in res["result"]:
+            if update["update_id"] > LAST_UPDATE_ID:
+                LAST_UPDATE_ID = update["update_id"]
+                if "message" in update and "text" in update["message"]:
+                    return update["message"]["text"]
+    except:
+        pass
+    return None
+
+def check_errors():
+    cmd = f"journalctl -u {SERVICE_NAME} -n 30 --no-pager"
+    try:
+        output = subprocess.check_output(cmd, shell=True, text=True).lower()
+
+        denied = output.count("denied")
+        timeout = output.count("timeout")
+        socket_err = output.count("socket error")
+
+        total = denied + timeout + socket_err
+
+        print(f"[{VPS_NAME}] denied:{denied} timeout:{timeout} socket:{socket_err}")
+
+        return denied, total
+    except:
+        return 0, 0
+
+def restart_service():
+    print(f"[{VPS_NAME}] >>> RESTART SERVICE <<<")
+    os.system(f"systemctl restart {SERVICE_NAME}")
+
+print(f"=== WATCHER STARTED: {VPS_NAME} ===")
+
+while True:
+    try:
+        # 🔹 command dari Telegram
+        cmd = get_updates()
+        if cmd:
+            if f"/restart {VPS_NAME}" in cmd:
+                restart_service()
+                send_telegram(f"🔁 {VPS_NAME} berhasil di-restart")
+
+        # 🔹 cek error
+        denied, total_error = check_errors()
+
+        if total_error >= ERROR_THRESHOLD:
+            restart_service()
+            time.sleep(60)
+
+            denied_after, _ = check_errors()
+
+            # ❗ notif hanya jika denied tetap tinggi
+            if denied_after >= ERROR_THRESHOLD:
+                now = time.time()
+                if now - LAST_ALERT > ALERT_COOLDOWN:
+                    send_telegram(
+                        f"❌ ERROR VPS\n"
+                        f"VPS: {VPS_NAME}\n"
+                        f"Denied: {denied_after}\n"
+                        f"Status: IP PROXY MATI"
+                    )
+                    LAST_ALERT = now
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+
+    time.sleep(CHECK_INTERVAL)
+EOF
+
+echo "Starting screen..."
+
+screen -S autorestart-earnapp -X quit 2>/dev/null
+pkill -f autorestart.py 2>/dev/null
+
+screen -dmS autorestart-earnapp python3 $(pwd)/autorestart.py
+
+echo "========================================="
+echo "DONE!"
+echo "Cek log: screen -r autorestart-earnapp"
+echo "========================================="
